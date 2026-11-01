@@ -1,0 +1,1 @@
+{"schema":1,"name":"collectionskit","version":"0.1.0","description":"Bounded generic hash maps and sets with explicit hash/equality policies, collision handling and detached snapshots"}

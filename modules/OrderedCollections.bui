@@ -1,0 +1,280 @@
+Import collectionskit.CollectionsKit
+
+''' Detached key/value pair. Payload references are shallow copies.
+Public Class OrderedEntry Of K, V
+    Private Property mKey As K
+    Private Property mValue As V
+    Public Sub Constructor(key As K, item As V)
+        mKey = key
+        mValue = item
+    End Sub
+    Public Property Key As K
+        Get
+            Return mKey
+        End Get
+    End Property
+    Public Property Value As V
+        Get
+            Return mValue
+        End Get
+    End Property
+End Class
+
+' Internal index links avoid reference cycles between neighboring entries.
+Private Class CollectionsKitOrderedSlot Of K, V
+    Public Property Key As K
+    Public Property Item As V
+    Public Property Previous As Integer = -1
+    Public Property Following As Integer = -1
+    Public Property Index As Integer
+    Public Sub Constructor(key As K, item As V, index As Integer)
+        Me.Key = key
+        Me.Item = item
+        Me.Index = index
+    End Sub
+End Class
+
+''' Bounded insertion-ordered hash map. Policy callbacks must be stable and non-reentrant.
+Public Class OrderedHashMap Of K, V
+    Private Property mMap As HashMap Of K, Integer
+    Private Property mSlots As Array Of Optional Of CollectionsKitOrderedSlot Of K, V = []
+    Private Property mFree As Array Of Integer = []
+    Private Property mFirst As Integer = -1
+    Private Property mLast As Integer = -1
+    Private Property mBusy As Boolean = False
+    Private Property mPolicy As CollectionKeyPolicy Of K
+    Private Property mLimit As Integer
+
+    Public Sub Constructor(policy As CollectionKeyPolicy Of K, maxEntries As Integer = 100000)
+        mMap = New HashMap Of K, Integer(policy, maxEntries)
+        mPolicy = policy
+        mLimit = maxEntries
+    End Sub
+    Public Property Count As Integer
+        Get
+            Return mMap.Count
+        End Get
+    End Property
+    Public Property Capacity As Integer
+        Get
+            Return mLimit
+        End Get
+    End Property
+    Private Sub EnterOperation()
+        If mBusy Then Throw New InvalidArgumentException("OrderedHashMap operations must not reenter")
+        mBusy = True
+    End Sub
+    ''' True for a new key; False for replacement, which retains key and position.
+    Public Function Set(key As K, item As V) As Boolean
+        Me.EnterOperation()
+        Try
+            Dim found As Optional Of Integer = mMap.Get(key)
+            If found.HasValue Then
+                Dim held As V = mSlots(found.Value).Value.Item
+                mSlots(found.Value).Value.Item = item
+                Return False
+            End If
+            If Me.Count >= mLimit Then Throw New InvalidArgumentException("OrderedHashMap entry limit reached")
+            Dim index As Integer = Array.Count(mSlots)
+            If Array.Count(mFree) > 0 Then index = mFree(Array.Count(mFree) - 1)
+            Dim slot As New CollectionsKitOrderedSlot Of K, V(key, item, index)
+            ' Reserve storage before calling policy again. A failure leaves a reusable empty slot.
+            If index = Array.Count(mSlots) Then
+                Dim emptySlot As Optional Of CollectionsKitOrderedSlot Of K, V = None
+                Array.Append(mSlots, emptySlot)
+                Array.Append(mFree, index)
+            End If
+            mSlots(index) = Some(slot)
+            Try
+                mMap.Set(key, index)
+            Catch e As Exception
+                mSlots(index) = None
+                Throw e
+            End Try
+            Array.RemoveAt(mFree, Array.Count(mFree) - 1)
+            slot.Previous = mLast
+            If mLast >= 0 Then mSlots(mLast).Value.Following = index
+            If mFirst < 0 Then mFirst = index
+            mLast = index
+            Return True
+        Finally
+            mBusy = False
+        End Try
+    End Function
+    Public Function Get(key As K) As Optional Of V
+        Me.EnterOperation()
+        Try
+            Dim found As Optional Of Integer = mMap.Get(key)
+            If Not found.HasValue Then Return None
+            Return Some(mSlots(found.Value).Value.Item)
+        Finally
+            mBusy = False
+        End Try
+    End Function
+    Public Function ContainsKey(key As K) As Boolean
+        Me.EnterOperation()
+        Try
+            Return mMap.ContainsKey(key)
+        Finally
+            mBusy = False
+        End Try
+    End Function
+    Public Function Remove(key As K) As Boolean
+        Me.EnterOperation()
+        Try
+            Dim found As Optional Of Integer = mMap.Get(key)
+            If Not found.HasValue Then Return False
+            Dim slot As CollectionsKitOrderedSlot Of K, V = mSlots(found.Value).Value
+            ' Reserve free-list capacity before the last potentially throwing callback.
+            Array.Append(mFree, slot.Index)
+            Try
+                mMap.Remove(key)
+            Catch e As Exception
+                Array.RemoveAt(mFree, Array.Count(mFree) - 1)
+                Throw e
+            End Try
+            If slot.Previous >= 0 Then
+                mSlots(slot.Previous).Value.Following = slot.Following
+            Else
+                mFirst = slot.Following
+            End If
+            If slot.Following >= 0 Then
+                mSlots(slot.Following).Value.Previous = slot.Previous
+            Else
+                mLast = slot.Previous
+            End If
+            Dim removedIndex As Integer = slot.Index
+            mSlots(removedIndex) = None
+            Return True
+        Finally
+            mBusy = False
+        End Try
+    End Function
+    ''' Paired snapshots preserve insertion order and do not expose internal slots.
+    Public Function Entries() As Array Of OrderedEntry Of K, V
+        Me.EnterOperation()
+        Try
+            Dim output() As OrderedEntry Of K, V
+            Dim index As Integer = mFirst
+            While index >= 0
+                Dim slot As CollectionsKitOrderedSlot Of K, V = mSlots(index).Value
+                Array.Append(output, New OrderedEntry Of K, V(slot.Key, slot.Item))
+                index = slot.Following
+            End While
+            Return output
+        Finally
+            mBusy = False
+        End Try
+    End Function
+    Public Sub Clear()
+        Dim heldMap As HashMap Of K, Integer
+        Dim heldSlots As Array Of Optional Of CollectionsKitOrderedSlot Of K, V
+        Me.EnterOperation()
+        Try
+            heldMap = mMap
+            heldSlots = mSlots
+            mMap = New HashMap Of K, Integer(mPolicy, mLimit)
+            mSlots = []
+            mFree = []
+            mFirst = -1
+            mLast = -1
+        Finally
+            mBusy = False
+        End Try
+    End Sub
+End Class
+
+''' Bounded growing ring buffer. Removed slots are immediately reset to None.
+Public Class Deque Of T
+    Private Property mItems As Array Of Optional Of T = []
+    Private Property mHead As Integer = 0
+    Private Property mCount As Integer = 0
+    Private Property mLimit As Integer
+    Public Sub Constructor(maxEntries As Integer = 100000)
+        If maxEntries < 1 Or maxEntries > 1000000 Then Throw New InvalidArgumentException("Deque entry limit must be in 1..1000000")
+        mLimit = maxEntries
+    End Sub
+    Public Property Count As Integer
+        Get
+            Return mCount
+        End Get
+    End Property
+    Public Property Capacity As Integer
+        Get
+            Return mLimit
+        End Get
+    End Property
+    Private Sub EnsureRoom()
+        If mCount >= mLimit Then Throw New InvalidArgumentException("Deque entry limit reached")
+        If mCount < Array.Count(mItems) Then Exit Sub
+        Dim size As Integer = Array.Count(mItems) * 2
+        If size < 8 Then size = 8
+        If size > mLimit Then size = mLimit
+        Dim grown() As Optional Of T
+        For i As Integer = 0 To size - 1
+            If i < mCount Then
+                Array.Append(grown, mItems((mHead + i) Mod Array.Count(mItems)))
+            Else
+                Dim empty As Optional Of T = None
+                Array.Append(grown, empty)
+            End If
+        Next
+        mItems = grown
+        mHead = 0
+    End Sub
+    Public Sub PushBack(item As T)
+        Me.EnsureRoom()
+        mItems((mHead + mCount) Mod Array.Count(mItems)) = Some(item)
+        mCount += 1
+    End Sub
+    Public Sub PushFront(item As T)
+        Me.EnsureRoom()
+        mHead = (mHead + Array.Count(mItems) - 1) Mod Array.Count(mItems)
+        mItems(mHead) = Some(item)
+        mCount += 1
+    End Sub
+    Public Function PeekFront() As Optional Of T
+        If mCount = 0 Then Return None
+        Return mItems(mHead)
+    End Function
+    Public Function PeekBack() As Optional Of T
+        If mCount = 0 Then Return None
+        Return mItems((mHead + mCount - 1) Mod Array.Count(mItems))
+    End Function
+    Public Function TryPopFront() As Optional Of T
+        If mCount = 0 Then Return None
+        Dim output As Optional Of T = mItems(mHead)
+        mItems(mHead) = None
+        mHead = (mHead + 1) Mod Array.Count(mItems)
+        mCount -= 1
+        Return output
+    End Function
+    Public Function TryPopBack() As Optional Of T
+        If mCount = 0 Then Return None
+        Dim index As Integer = (mHead + mCount - 1) Mod Array.Count(mItems)
+        Dim output As Optional Of T = mItems(index)
+        mItems(index) = None
+        mCount -= 1
+        Return output
+    End Function
+    Public Function Items() As Array Of T
+        Dim output() As T
+        For i As Integer = 0 To mCount - 1
+            Array.Append(output, mItems((mHead + i) Mod Array.Count(mItems)).Value)
+        Next
+        Return output
+    End Function
+    Public Function Clone() As Deque Of T
+        Dim output As New Deque Of T(mLimit)
+        For Each item As T In Me.Items()
+            output.PushBack(item)
+        Next
+        Return output
+    End Function
+    Public Sub Clear()
+        Dim held As Array Of Optional Of T = mItems
+        mItems = []
+        mHead = 0
+        mCount = 0
+    End Sub
+End Class

@@ -1,0 +1,16 @@
+Import collectionskit
+Import collectionskit.OrderedCollections
+
+Sub Main()
+    Dim ordered As New OrderedHashMap Of String, Integer(New ExactStringKeyPolicy(), 100)
+    ordered.Set("first", 10)
+    ordered.Set("second", 20)
+    ordered.Set("first", 30)
+    For Each entry As OrderedEntry Of String, Integer In ordered.Entries()
+        Print entry.Key + ": " + Str(entry.Value)
+    Next
+    Dim pending As New Deque Of String(100)
+    pending.PushBack("normal")
+    pending.PushFront("urgent")
+    Print pending.TryPopFront().Value
+End Sub

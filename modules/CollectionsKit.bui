@@ -1,0 +1,295 @@
+''' A stable policy: equal keys must have identical hashes for their whole stored lifetime.
+Public Interface CollectionKeyPolicy Of K
+    Function Hash(key As K) As Integer
+    Function Equal(leftKey As K, rightKey As K) As Boolean
+End Interface
+
+''' Exact Unicode scalar/string-byte equality; no implicit case folding or normalization.
+Public Class ExactStringKeyPolicy Implements CollectionKeyPolicy Of String
+    Public Function Hash(key As String) As Integer
+        Dim hashValue As Integer = 0
+        For Each scalar As String In String.Chars(key)
+            hashValue = (hashValue * 31 + String.Asc(scalar)) Mod 2147483647
+        Next
+        Return hashValue
+    End Function
+
+    Public Function Equal(leftKey As String, rightKey As String) As Boolean
+        Return String.Compare(leftKey, rightKey, True) = 0
+    End Function
+End Class
+
+Public Class IntegerKeyPolicy Implements CollectionKeyPolicy Of Integer
+    Public Function Hash(key As Integer) As Integer
+        Return key Xor (key >> 32)
+    End Function
+
+    Public Function Equal(leftKey As Integer, rightKey As Integer) As Boolean
+        Return leftKey = rightKey
+    End Function
+End Class
+
+''' Bounded, single-threaded hash map with separate chaining and dense entry storage.
+Public Class HashMap Of K, V
+    Private Property mPolicy As CollectionKeyPolicy Of K
+    Private Property mBuckets As Array Of Integer = []
+    Private Property mKeys As Array Of K = []
+    Private Property mValues As Array Of V = []
+    Private Property mHashes As Array Of Integer = []
+    Private Property mNext As Array Of Integer = []
+    Private Property mLimit As Integer
+    Private Property mBusy As Boolean = False
+
+    Public Sub Constructor(policy As CollectionKeyPolicy Of K, maxEntries As Integer = 100000)
+        If policy Is Nil Then Throw New InvalidArgumentException("HashMap policy must not be Nil")
+        If maxEntries < 1 Or maxEntries > 1000000 Then Throw New InvalidArgumentException("HashMap entry limit must be in 1..1000000")
+        mPolicy = policy
+        mLimit = maxEntries
+        Me.Rebuild(16)
+    End Sub
+
+    Public Property Count As Integer
+        Get
+            Return Array.Count(mKeys)
+        End Get
+    End Property
+
+    Public Property Capacity As Integer
+        Get
+            Return mLimit
+        End Get
+    End Property
+
+    Public Property BucketCount As Integer
+        Get
+            Return Array.Count(mBuckets)
+        End Get
+    End Property
+
+    Private Sub EnterOperation()
+        If mBusy Then Throw New InvalidArgumentException("HashMap operations must not reenter")
+        mBusy = True
+    End Sub
+
+    Private Function Bucket(hashValue As Integer) As Integer
+        Return (hashValue And 9223372036854775807) Mod Array.Count(mBuckets)
+    End Function
+
+    Private Function Find(key As K, hashValue As Integer) As Integer
+        Dim index As Integer = mBuckets(Me.Bucket(hashValue))
+        While index >= 0
+            If mHashes(index) = hashValue Then
+                If mPolicy.Equal(mKeys(index), key) Then Return index
+            End If
+            index = mNext(index)
+        End While
+        Return -1
+    End Function
+
+    Private Sub Rebuild(size As Integer)
+        Dim buckets() As Integer
+        Dim links() As Integer
+        For i As Integer = 0 To size - 1
+            Array.Append(buckets, -1)
+        Next
+        For i As Integer = 0 To Array.Count(mKeys) - 1
+            Dim slot As Integer = (mHashes(i) And 9223372036854775807) Mod size
+            Array.Append(links, buckets(slot))
+            buckets(slot) = i
+        Next
+        mNext = links
+        mBuckets = buckets
+    End Sub
+
+    ''' Insert or replace; True means a new key was inserted. Replacing retains the original key.
+    Public Function Set(key As K, item As V) As Boolean
+        Dim heldValue As V
+        Me.EnterOperation()
+        Try
+            Dim hashValue As Integer = mPolicy.Hash(key)
+            Dim index As Integer = Me.Find(key, hashValue)
+            If index >= 0 Then
+                heldValue = mValues(index)
+                mValues(index) = item
+                Return False
+            End If
+            If Me.Count >= mLimit Then Throw New InvalidArgumentException("HashMap entry limit reached")
+            If (Me.Count + 1) * 4 > Array.Count(mBuckets) * 3 Then Me.Rebuild(Array.Count(mBuckets) * 2)
+            Dim slot As Integer = Me.Bucket(hashValue)
+            index = Me.Count
+            Try
+                Array.Append(mKeys, key)
+                Array.Append(mValues, item)
+                Array.Append(mHashes, hashValue)
+                Array.Append(mNext, mBuckets(slot))
+            Catch e As Exception
+                If Array.Count(mNext) > index Then Array.RemoveAt(mNext, index)
+                If Array.Count(mHashes) > index Then Array.RemoveAt(mHashes, index)
+                If Array.Count(mValues) > index Then Array.RemoveAt(mValues, index)
+                If Array.Count(mKeys) > index Then Array.RemoveAt(mKeys, index)
+                Throw e
+            End Try
+            mBuckets(slot) = index
+            Return True
+        Finally
+            mBusy = False
+        End Try
+    End Function
+
+    Public Function ContainsKey(key As K) As Boolean
+        Me.EnterOperation()
+        Try
+            Return Me.Find(key, mPolicy.Hash(key)) >= 0
+        Finally
+            mBusy = False
+        End Try
+    End Function
+
+    Public Function Get(key As K) As Optional Of V
+        Me.EnterOperation()
+        Try
+            Dim index As Integer = Me.Find(key, mPolicy.Hash(key))
+            If index < 0 Then Return None
+            Return Some(mValues(index))
+        Finally
+            mBusy = False
+        End Try
+    End Function
+
+    Public Function GetOrDefault(key As K, fallback As V) As V
+        Me.EnterOperation()
+        Try
+            Dim index As Integer = Me.Find(key, mPolicy.Hash(key))
+            If index < 0 Then Return fallback
+            Return mValues(index)
+        Finally
+            mBusy = False
+        End Try
+    End Function
+
+    ''' Remove a key, moving the last dense entry into its slot. Snapshot order is unspecified.
+    Public Function Remove(key As K) As Boolean
+        Me.EnterOperation()
+        Try
+            Dim hashValue As Integer = mPolicy.Hash(key)
+            Dim index As Integer = Me.Find(key, hashValue)
+            If index < 0 Then Return False
+            ' Retain removed payloads until all parallel arrays and chains are consistent.
+            Dim heldKey As K = mKeys(index)
+            Dim heldValue As V = mValues(index)
+            Dim slot As Integer = Me.Bucket(hashValue)
+            Dim previous As Integer = -1
+            Dim cursor As Integer = mBuckets(slot)
+            While cursor <> index
+                previous = cursor
+                cursor = mNext(cursor)
+            End While
+            If previous < 0 Then
+                mBuckets(slot) = mNext(index)
+            Else
+                mNext(previous) = mNext(index)
+            End If
+            Dim last As Integer = Me.Count - 1
+            If index <> last Then
+                Dim lastSlot As Integer = Me.Bucket(mHashes(last))
+                previous = -1
+                cursor = mBuckets(lastSlot)
+                While cursor <> last
+                    previous = cursor
+                    cursor = mNext(cursor)
+                End While
+                If previous < 0 Then
+                    mBuckets(lastSlot) = index
+                Else
+                    mNext(previous) = index
+                End If
+                mKeys(index) = mKeys(last)
+                mValues(index) = mValues(last)
+                mHashes(index) = mHashes(last)
+                mNext(index) = mNext(last)
+            End If
+            Array.RemoveAt(mKeys, last)
+            Array.RemoveAt(mValues, last)
+            Array.RemoveAt(mHashes, last)
+            Array.RemoveAt(mNext, last)
+            Return True
+        Finally
+            mBusy = False
+        End Try
+    End Function
+
+    Public Function Keys() As Array Of K
+        Me.EnterOperation()
+        Try
+            Return Array.Clone(mKeys)
+        Finally
+            mBusy = False
+        End Try
+    End Function
+
+    Public Function Values() As Array Of V
+        Me.EnterOperation()
+        Try
+            Return Array.Clone(mValues)
+        Finally
+            mBusy = False
+        End Try
+    End Function
+
+    Public Sub Clear()
+        Dim heldKeys() As K
+        Dim heldValues() As V
+        Me.EnterOperation()
+        Try
+            heldKeys = mKeys
+            heldValues = mValues
+            mKeys = []
+            mValues = []
+            mHashes = []
+            Me.Rebuild(16)
+        Finally
+            mBusy = False
+        End Try
+    End Sub
+End Class
+
+''' HashMap-backed bounded set using the same explicit key policy.
+Public Class HashSet Of T
+    Private Property mMap As HashMap Of T, Boolean
+
+    Public Sub Constructor(policy As CollectionKeyPolicy Of T, maxEntries As Integer = 100000)
+        mMap = New HashMap Of T, Boolean(policy, maxEntries)
+    End Sub
+
+    Public Property Count As Integer
+        Get
+            Return mMap.Count
+        End Get
+    End Property
+
+    Public Property Capacity As Integer
+        Get
+            Return mMap.Capacity
+        End Get
+    End Property
+
+    Public Function Add(item As T) As Boolean
+        Return mMap.Set(item, True)
+    End Function
+
+    Public Function Contains(item As T) As Boolean
+        Return mMap.ContainsKey(item)
+    End Function
+
+    Public Function Remove(item As T) As Boolean
+        Return mMap.Remove(item)
+    End Function
+
+    Public Function Items() As Array Of T
+        Return mMap.Keys()
+    End Function
+
+    Public Sub Clear()
+        mMap.Clear()
+    End Sub
+End Class

@@ -1,0 +1,16 @@
+Import collectionskit
+
+Sub Main()
+    Dim counts As New HashMap Of String, Integer(New ExactStringKeyPolicy(), 1000)
+    For Each word As String In ["Buoy", "buoy", "Buoy", "船"]
+        counts.Set(word, counts.GetOrDefault(word, 0) + 1)
+    Next
+    Dim keys As Array Of String = counts.Keys()
+    Dim values As Array Of Integer = counts.Values()
+    For i As Integer = 0 To Array.Count(keys) - 1
+        Print keys(i) + ": " + Str(values(i))
+    Next
+    Dim seen As New HashSet Of Integer(New IntegerKeyPolicy(), 100)
+    seen.Add(42)
+    Print "Seen 42: " + Str(seen.Contains(42))
+End Sub
