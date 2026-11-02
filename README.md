@@ -1,4 +1,4 @@
-# HashMap / HashSet with explicit key policies
+# HashMap and HashSet
 
 Use custom hash and equality policies for primitive or class keys. The package's
 maps and sets enforce entry budgets and return detached snapshots. Built-in
