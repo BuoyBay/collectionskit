@@ -101,9 +101,3 @@ Items, Clone and Clear O(n). Space is O(high-water item count) until Clear.
 There are no callbacks, synchronization, eviction or live iteration features.
 Destructors should not throw. As with the map, allocator failures are outside
 the mutation atomicity contract.
-
-## Verification
-
-
-Maintainers run the private validation suite before release. See the repository README for public build instructions.
-

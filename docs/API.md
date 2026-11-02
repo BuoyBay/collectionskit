@@ -81,24 +81,12 @@ memory. The deterministic included hashes are not resistant to adversarial hash
 flooding. Treat untrusted bulk input with appropriate caller limits or supply a
 suitable keyed policy. No allocation-failure atomicity guarantee is made.
 
-## Build and verification
+## Package build
 
-```sh
-/usr/bin/buoy pkg seal . -o packages/collectionskit-0.1.0.buipkg
-```
-
-The verifier seals fresh source into a temporary isolated project, checks source,
-tests and example against six desktop targets, and compiles/runs consumers on
-the current host. Linux x86_64 execution is verified; macOS/Windows are compiler
-checks only. `BUOY` and `BPM_PACKAGER` override compiler/sealer paths.
-
-Focused tests exercise signed-minimum hashes, forced collisions, resizing, dense
-swap removal, replacement/capacity, detached arrays, empty and Unicode strings,
-custom equality, class identity and Nil values, exceptions and callback reentry.
-A Python dictionary oracle generates 12,000 deterministic operations, each run
-through both ordinary and constant-hash policies. A baseline probe confirms that
-core Map/Set already exist. The implementation is independently written for this
-workspace and contains no copied third-party collection code.
+The package supplies `manifest.json`, `bpm.json` and the source modules required
+for a consumer build. Use the repository README for the native package-builder
+invocation. Generic key policies, callbacks and budgets are part of the package
+contract on every deployment target.
 
 ## Ordered maps and double-ended queues
 
@@ -106,5 +94,3 @@ Ordered-map Clear retains replaced storage until its operation guard has cleared
 so released payload destructors can observe the completed empty map through its
 public methods. Destructors run after the mutation; their own changes or failures
 cannot roll it back.
-
-Maintainers run the private validation suite before release. See the repository README for public build instructions.

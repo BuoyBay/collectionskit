@@ -1,7 +1,7 @@
 # Generic hash maps and sets with explicit key policies
 
 Use custom hash and equality policies for primitive or class keys. The package's
-maps and sets enforce entry budgets and return detached snapshots. Built-in Buoy
+maps and sets enforce entry budgets and return detached snapshots. Built-in
 collections remain suitable when their default key semantics meet your needs.
 
 ## Install
@@ -48,7 +48,6 @@ On your own machine, install Buoy and run:
 buoy ai init --both
 ```
 
-The generated agent files and editor settings stay local and are ignored by Git.
 
 ## Contributing
 

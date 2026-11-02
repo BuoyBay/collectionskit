@@ -1,4 +1,4 @@
-# CollectionsKit implementation plan
+# CollectionsKit design notes
 
 Current-toolchain probe: the standard-library overview is stale. Buoy 0.72 ships
 Map and Set for primitive Hashable keys; dedicated map.md/set.md describe them.
@@ -21,10 +21,3 @@ equality is an equivalence relation. Stored object keys must not mutate relevant
 fields. Reentrant operations are rejected; callback exceptions restore guard and
 leave contents unchanged. Single-threaded; no ordering or hardened hash claims.
 Snapshot arrays are structurally detached but payload references remain shared.
-
-Validation: fresh isolated sealed consumer; source and consumer checked with real
-compiler JSON for six targets; Linux execution exercises collisions (including
-minimum signed hash), resize, all-chain removal orders, replacement at capacity,
-snapshots, exact Unicode strings, custom equality, class and Nil keys/values,
-policy exceptions and reentry. Add deterministic model-based differential runs
-against Python map/set fixtures and retain a built-in Map/Set baseline probe.

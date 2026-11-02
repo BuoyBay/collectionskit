@@ -12,5 +12,4 @@ Bounded generic hash maps and sets with explicit hash/equality policies, collisi
 
 [Getting started](getting-started.md) · [API contracts](api.md) · [Typed API](typed-api.md)
 
-
 [Ordered maps and deque](ordered-api.md) adds insertion-order snapshots and double-ended queue operations.
